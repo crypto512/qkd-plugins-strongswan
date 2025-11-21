@@ -223,7 +223,9 @@ def get_key_with_ids(master_sae_id):
         stored_master = key_data.get(b'master_sae', b'').decode('utf-8')
 
         if stored_master != master_sae_id:
-            app.logger.warning(f"Unauthorized: {g.sae_id} tried to get key for master={master_sae_id}")
+            # SECURITY: Log generic message to prevent information disclosure
+            # Don't log SAE IDs as this aids reconnaissance attacks
+            app.logger.warning("Unauthorized key retrieval attempt detected")
             return jsonify({"message": "Unauthorized"}), 401
 
         raw_key = key_data.get(b'key', b'')

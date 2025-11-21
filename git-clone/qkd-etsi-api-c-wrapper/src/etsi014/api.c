@@ -15,6 +15,7 @@
 #include "etsi014/api.h"
 #include "debug.h"
 #include <string.h>
+#include <stdlib.h>
 #include <pthread.h>
 
 #ifdef QKD_USE_SIMULATED
@@ -84,11 +85,24 @@ uint32_t GET_KEY_WITH_IDS(const char *kme_hostname, const char *master_sae_id,
 void QKD_014_SET_CERT_CONFIG(const qkd_cert_config_t *config) {
     pthread_mutex_lock(&g_cert_config_mutex);
 
-    /* Store pointers - caller must ensure strings remain valid */
-    g_cert_config.cert_path = config ? config->cert_path : NULL;
-    g_cert_config.key_path = config ? config->key_path : NULL;
-    g_cert_config.ca_cert_path = config ? config->ca_cert_path : NULL;
-    g_cert_config.sae_id = config ? config->sae_id : NULL;
+    /* SECURITY FIX: Copy strings instead of storing pointers to prevent use-after-free
+     * Free old strings before replacing to prevent memory leaks */
+    free((void*)g_cert_config.cert_path);
+    free((void*)g_cert_config.key_path);
+    free((void*)g_cert_config.ca_cert_path);
+    free((void*)g_cert_config.sae_id);
+
+    if (config) {
+        g_cert_config.cert_path = config->cert_path ? strdup(config->cert_path) : NULL;
+        g_cert_config.key_path = config->key_path ? strdup(config->key_path) : NULL;
+        g_cert_config.ca_cert_path = config->ca_cert_path ? strdup(config->ca_cert_path) : NULL;
+        g_cert_config.sae_id = config->sae_id ? strdup(config->sae_id) : NULL;
+    } else {
+        g_cert_config.cert_path = NULL;
+        g_cert_config.key_path = NULL;
+        g_cert_config.ca_cert_path = NULL;
+        g_cert_config.sae_id = NULL;
+    }
 
     QKD_DBG_INFO("Certificate configuration set:");
     QKD_DBG_INFO("  Cert: %s", g_cert_config.cert_path ? g_cert_config.cert_path : "(null)");
@@ -106,6 +120,9 @@ int QKD_014_GET_CERT_CONFIG(qkd_cert_config_t *config) {
 
     pthread_mutex_lock(&g_cert_config_mutex);
 
+    /* SECURITY NOTE: Pointers returned are to internal storage managed by this module.
+     * Caller must NOT free these pointers. Pointers remain valid until next SET call.
+     * For thread safety, caller should copy strings if needed beyond immediate use. */
     config->cert_path = g_cert_config.cert_path;
     config->key_path = g_cert_config.key_path;
     config->ca_cert_path = g_cert_config.ca_cert_path;

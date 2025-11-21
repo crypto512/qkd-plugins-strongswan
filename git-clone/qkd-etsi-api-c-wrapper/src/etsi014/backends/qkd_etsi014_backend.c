@@ -228,16 +228,26 @@ static char *handle_request_https(const char *url, const char *post_data, long *
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
 
-        /* SSL verification - enable hostname verification by default
-         * Can be disabled via QKD_SSL_VERIFY_HOST=0 for testing only */
+        /* SECURITY: SSL/TLS verification always enabled in production builds
+         * SSL hostname verification and peer verification are MANDATORY for security */
+#ifdef ALLOW_INSECURE_SSL_FOR_TESTING
+        /* INSECURE: This code path only available when compiled with -DALLOW_INSECURE_SSL_FOR_TESTING
+         * NEVER use this in production! Only for development with self-signed certificates */
         const char *verify_host = getenv("QKD_SSL_VERIFY_HOST");
         if (verify_host && strcmp(verify_host, "0") == 0) {
             curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
-            QKD_DBG_WARN("SSL hostname verification DISABLED - USE ONLY FOR TESTING! "
-                        "Production deployments MUST use proper certificates.");
+            QKD_DBG_WARN("====================================================================");
+            QKD_DBG_WARN("CRITICAL SECURITY WARNING: SSL hostname verification DISABLED!");
+            QKD_DBG_WARN("This build allows man-in-the-middle attacks on QKD key exchange!");
+            QKD_DBG_WARN("NEVER use this configuration in production environments!");
+            QKD_DBG_WARN("====================================================================");
         } else {
             curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
         }
+#else
+        /* Production build: SSL verification always enabled, cannot be disabled */
+        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+#endif
         curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
 
         /* Set HTTP headers for JSON */
@@ -347,16 +357,26 @@ static char *handle_request_https(const char *url, const char *post_data, long *
         curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, connect_timeout);
         curl_easy_setopt(curl, CURLOPT_TIMEOUT, transfer_timeout);
 
-        /* SSL verification - enable hostname verification by default
-         * Can be disabled via QKD_SSL_VERIFY_HOST=0 for testing only */
+        /* SECURITY: SSL/TLS verification always enabled in production builds
+         * SSL hostname verification and peer verification are MANDATORY for security */
+#ifdef ALLOW_INSECURE_SSL_FOR_TESTING
+        /* INSECURE: This code path only available when compiled with -DALLOW_INSECURE_SSL_FOR_TESTING
+         * NEVER use this in production! Only for development with self-signed certificates */
         const char *verify_host = getenv("QKD_SSL_VERIFY_HOST");
         if (verify_host && strcmp(verify_host, "0") == 0) {
             curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
-            QKD_DBG_WARN("SSL hostname verification DISABLED - USE ONLY FOR TESTING! "
-                        "Production deployments MUST use proper certificates.");
+            QKD_DBG_WARN("====================================================================");
+            QKD_DBG_WARN("CRITICAL SECURITY WARNING: SSL hostname verification DISABLED!");
+            QKD_DBG_WARN("This build allows man-in-the-middle attacks on QKD key exchange!");
+            QKD_DBG_WARN("NEVER use this configuration in production environments!");
+            QKD_DBG_WARN("====================================================================");
         } else {
             curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
         }
+#else
+        /* Production build: SSL verification always enabled, cannot be disabled */
+        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+#endif
         curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
 
         /* Set HTTP headers for JSON */

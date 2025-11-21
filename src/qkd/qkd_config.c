@@ -251,6 +251,17 @@ void qkd_config_destroy(void)
 
 qkd_config_t *qkd_config_get(void)
 {
+    /* SECURITY NOTE: Returns pointer to global config without locking.
+     * This is safe ONLY because:
+     * 1. Config is initialized once at plugin load and never modified
+     * 2. Config is destroyed only at plugin unload when no threads are active
+     * 3. All config fields are read-only after initialization
+     *
+     * If config becomes mutable, this function must be replaced with:
+     * - qkd_config_lock() / qkd_config_unlock() pair, OR
+     * - qkd_config_get_copy() that returns a deep copy
+     *
+     * Callers MUST check for NULL return value. */
     return g_config;
 }
 

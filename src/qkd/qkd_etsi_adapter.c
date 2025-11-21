@@ -12,6 +12,7 @@
 #include <openssl/bio.h>
 #include <openssl/buffer.h>
 #include <openssl/evp.h>
+#include <openssl/crypto.h>  /* For OPENSSL_secure_malloc/secure_clear_free */
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -46,6 +47,14 @@ struct qkd_handle_t {
 };
 
 void qkd_print_key_id(const char *prefix, chunk_t key_id) {
+    /* SECURITY: Validate key_id size to prevent buffer overflow
+     * chunk_to_hex converts to 2 chars per byte + null terminator */
+    if (key_id.len > 127) {
+        DBG1(DBG_LIB, "QKD_plugin: %s key ID: [%zu bytes, too large to display]",
+             prefix, key_id.len);
+        return;
+    }
+
     char hex[256] = "";
     chunk_to_hex(key_id, hex, FALSE);
     DBG1(DBG_LIB, "QKD_plugin: %s key ID: %s", prefix, hex);
@@ -53,12 +62,36 @@ void qkd_print_key_id(const char *prefix, chunk_t key_id) {
 
 void qkd_print_key(const char *prefix, chunk_t key) {
     qkd_config_t *cfg = qkd_config_get();
-    /* Only print keys if debug_keys is explicitly enabled (INSECURE) */
+
+#ifdef DEBUG_QKD_KEYS
+    /* SECURITY WARNING: This code logs cryptographic key material in cleartext.
+     * Only enabled when compiled with -DDEBUG_QKD_KEYS flag.
+     * NEVER use in production builds - violates fundamental crypto security. */
     if (cfg && cfg->debug_keys) {
-        char hex[2048] = "";
-        chunk_to_hex(key, hex, FALSE);
-        DBG1(DBG_LIB, "QKD_plugin: %s key: %s", prefix, hex);
-    } else {
+        /* Validate key size to prevent buffer overflow */
+        if (key.len > 1023) {
+            DBG1(DBG_LIB, "QKD_plugin: %s key: [%zu bytes, too large to display]",
+                 prefix, key.len);
+            return;
+        }
+
+        /* Only log first and last 4 bytes to reduce exposure */
+        if (key.len >= 8) {
+            char first_hex[10], last_hex[10];
+            chunk_t first = chunk_create(key.ptr, 4);
+            chunk_t last = chunk_create(key.ptr + key.len - 4, 4);
+            chunk_to_hex(first, first_hex, FALSE);
+            chunk_to_hex(last, last_hex, FALSE);
+            DBG1(DBG_LIB, "QKD_plugin: %s key: [%zu bytes] %s...%s (INSECURE LOG!)",
+                 prefix, key.len, first_hex, last_hex);
+        } else {
+            char hex[64] = "";
+            chunk_to_hex(key, hex, FALSE);
+            DBG1(DBG_LIB, "QKD_plugin: %s key: %s (INSECURE LOG!)", prefix, hex);
+        }
+    } else
+#endif
+    {
         DBG2(DBG_LIB, "QKD_plugin: %s key: [%zu bytes, hidden]", prefix, key.len);
     }
 }
@@ -67,8 +100,23 @@ void qkd_print_key(const char *prefix, chunk_t key) {
 static void free_key_container(qkd_key_container_t *container) {
     if (container && container->keys) {
         for (size_t i = 0; i < container->key_count; i++) {
+            /* SECURITY: Securely clear cryptographic key material before freeing
+             * Prevents key recovery from heap memory dumps */
+            if (container->keys[i].key) {
+                size_t key_len = strlen(container->keys[i].key);
+                /* Use explicit_bzero or memset_s if available, else memset */
+                #ifdef HAVE_EXPLICIT_BZERO
+                explicit_bzero(container->keys[i].key, key_len);
+                #elif defined(HAVE_MEMSET_S)
+                memset_s(container->keys[i].key, key_len, 0, key_len);
+                #else
+                /* Volatile pointer prevents compiler optimization */
+                volatile char *p = (volatile char *)container->keys[i].key;
+                while (key_len--) *p++ = 0;
+                #endif
+                free(container->keys[i].key);
+            }
             free(container->keys[i].key_ID);
-            free(container->keys[i].key);
         }
         free(container->keys);
         container->keys = NULL;
@@ -87,7 +135,23 @@ static void decode_UUID(const unsigned char bin[16], char uuid_str[37]) {
 }
 
 static unsigned char *base64_decode(const char *in, size_t *outlen) {
+    if (!in || !outlen) {
+        return NULL;
+    }
+
+    size_t inlen = strlen(in);
+    /* SECURITY: Validate input length to prevent integer overflow
+     * Max reasonable base64 key size: 4096 bits = 512 bytes raw = ~683 chars base64 */
+    if (inlen == 0 || inlen > 10000) {
+        DBG1(DBG_LIB, "QKD_plugin: Invalid base64 input length: %zu", inlen);
+        return NULL;
+    }
+
     BIO *b64 = BIO_new(BIO_f_base64());
+    if (!b64) {
+        return NULL;
+    }
+
     BIO *bmem = BIO_new_mem_buf((void *)in, -1);
     if (!bmem) {
         BIO_free_all(b64);
@@ -96,15 +160,32 @@ static unsigned char *base64_decode(const char *in, size_t *outlen) {
     bmem = BIO_push(b64, bmem);
     BIO_set_flags(bmem, BIO_FLAGS_BASE64_NO_NL);
 
-    size_t inlen = strlen(in);
-    unsigned char *out = malloc(inlen);
-    *outlen = BIO_read(bmem, out, inlen);
+    /* Base64 decodes to approximately 3/4 of input size, add padding for safety */
+    size_t max_decode_len = (inlen * 3) / 4 + 4;
+
+    /* SECURITY: Use OpenSSL secure memory for cryptographic keys
+     * Prevents keys from being swapped to disk or written to core dumps */
+    unsigned char *out = OPENSSL_secure_malloc(max_decode_len);
+    if (!out) {
+        DBG1(DBG_LIB, "QKD_plugin: Secure memory allocation failed, falling back to regular malloc");
+        out = malloc(max_decode_len);
+        if (!out) {
+            BIO_free_all(bmem);
+            return NULL;
+        }
+    }
+
+    int read_len = BIO_read(bmem, out, max_decode_len);
     BIO_free_all(bmem);
 
-    if (*outlen <= 0) {
-        free(out);
+    if (read_len <= 0 || (size_t)read_len > max_decode_len) {
+        DBG1(DBG_LIB, "QKD_plugin: Base64 decode failed, read_len=%d", read_len);
+        /* Securely clear and free */
+        OPENSSL_secure_clear_free(out, max_decode_len);
         return NULL;
     }
+
+    *outlen = (size_t)read_len;
     return out;
 }
 #endif /* ETSI_014_API */
@@ -531,6 +612,16 @@ bool qkd_get_key_id(qkd_handle_t handle, chunk_t *key_id) {
         return FALSE;
     }
 
+    /* SECURITY: Validate key size matches expected size */
+    if (outlen != QKD_KEY_SIZE) {
+        DBG1(DBG_LIB, "QKD_plugin: Invalid key size %zu bytes, expected %d bytes",
+             outlen, QKD_KEY_SIZE);
+        OPENSSL_secure_clear_free(decoded_key, outlen);
+        free(key_id_data);
+        free_key_container(&container);
+        return FALSE;
+    }
+
     chunk_clear(&handle->key_id);
     chunk_clear(&handle->key);
 
@@ -655,9 +746,13 @@ bool qkd_get_key(qkd_handle_t handle) {
         return FALSE;
     }
 
+    /* SECURITY: Validate key size matches expected size to prevent cryptographic weakness */
     if (outlen != QKD_KEY_SIZE) {
-        DBG1(DBG_LIB, "QKD_plugin: Unexpected key size from QKD system: %zu",
-             outlen);
+        DBG1(DBG_LIB, "QKD_plugin: Invalid key size %zu bytes, expected %d bytes",
+             outlen, QKD_KEY_SIZE);
+        OPENSSL_secure_clear_free(decoded_key, outlen);
+        free_key_container(&container);
+        return FALSE;
     }
 
     chunk_clear(&handle->key);

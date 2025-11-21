@@ -27,16 +27,24 @@ struct private_qkd_kex_t {
     bool key_retrieved;
 };
 
-/* Timing log disabled for production - was security concern */
+#ifdef DEBUG_QKD_TIMING
+/* SECURITY WARNING: Precise timing information can leak operational details
+ * Only enabled with -DDEBUG_QKD_TIMING compile flag. Do NOT use in production.
+ * Timing side-channels can reveal key sizes, network conditions, etc. */
 static void log_time(private_qkd_kex_t *this) {
     struct timeval destroy_time;
     gettimeofday(&destroy_time, NULL);
 
-    long elapsed_us = (destroy_time.tv_sec - this->create_time.tv_sec) * 1000000 +
-                      (destroy_time.tv_usec - this->create_time.tv_usec);
-
-    DBG2(DBG_LIB, "QKD_plugin: key exchange completed in %ld us", elapsed_us);
+    /* Reduce precision to seconds to minimize side-channel risk */
+    long elapsed_sec = destroy_time.tv_sec - this->create_time.tv_sec;
+    DBG2(DBG_LIB, "QKD_plugin: key exchange completed in ~%ld seconds", elapsed_sec);
 }
+#else
+static inline void log_time(private_qkd_kex_t *this) {
+    /* No-op in production builds */
+    (void)this;
+}
+#endif
 
 METHOD(key_exchange_t, get_public_key, bool, private_qkd_kex_t *this,
        chunk_t *value) {

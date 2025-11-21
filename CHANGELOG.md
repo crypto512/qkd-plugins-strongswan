@@ -77,6 +77,12 @@ This release implements critical improvements for ETSI GS QKD 014 compliance, pr
   - Manual freeing of `qkd_status_t` fields (source_KME_ID, target_KME_ID, master_SAE_ID, slave_SAE_ID)
   - Avoids `qkd_014_free_status()` dependency (not available in all backends)
 
+- **PKI Certificate Permissions** (`docker/scripts/generate-pki.sh`)
+  - Fixed KME directory permissions from 750 to 755 for Docker container access
+  - Changed KME certificate key permissions from 600 to 644 for gunicorn process
+  - Automated permission setting in generate-pki.sh script for future runs
+  - Resolves "Permission denied" errors when KME containers attempt to load TLS certificates
+
 ### Testing
 
 - ✅ Full tunnel establishment with all improvements active
@@ -130,6 +136,7 @@ charon.plugins.qkd {
 7. `git-clone/qkd-etsi-api-c-wrapper/include/qkd_etsi_api.h` - Documentation clarified
 8. `docker/Makefile` - Docker compose V2 compatibility
 9. `docker/docker-compose.yml` - Use pre-built KME images
+10. `docker/scripts/generate-pki.sh` - Fixed certificate permissions for Docker compatibility
 
 ### Known Issues Resolved
 
@@ -251,6 +258,9 @@ Key Exchange Flow:
 ```bash
 cd docker
 
+# Generate PKI certificates (required for first-time setup)
+bash scripts/generate-pki.sh
+
 # Build container images (uses qkd-builder for reproducible builds)
 make build-no-cache
 
@@ -286,14 +296,25 @@ docker exec qkd-redis redis-cli -a qkd-redis-secret KEYS "qkd:key:*"
 docker-compose down
 ```
 
-### Alternative: Automated Test
+### Alternative: Automated Test Suite
 
 ```bash
 cd docker
 make test
 ```
 
-This runs: `build-no-cache` + `up` + `swanctl --load-all` + `swanctl --initiate` + `swanctl --list-sas`
+This runs a comprehensive test suite that:
+1. Generates PKI certificates automatically
+2. Builds containers (using cache for faster execution)
+3. Starts all services (docker-compose up -d)
+4. Checks KME health endpoints
+5. Loads swanctl configurations
+6. Initiates QKD tunnel
+7. Tests connectivity (ping)
+8. Displays comprehensive results with pass/fail summary
+9. Cleans up (docker-compose down -v)
+
+The test exits with code 0 on success, non-zero on failure.
 
 ### Expected Output
 

@@ -117,9 +117,19 @@ openssl x509 -req \
 # Cleanup CSR files
 rm -f "${PKI_DIR}"/*/*.csr
 
-# Set permissions
-chmod 600 "${PKI_DIR}"/*/*.key
-chmod 644 "${PKI_DIR}"/*/*.pem
+# Set permissions for Docker compatibility
+# KME directories need 755 to be readable by kme user in container
+chmod 755 "${PKI_DIR}"/kme
+chmod 644 "${PKI_DIR}"/kme/*.key  # KME keys need to be readable in container
+chmod 644 "${PKI_DIR}"/kme/*.pem
+
+# Other keys can be more restrictive
+chmod 600 "${PKI_DIR}"/alice/*.key
+chmod 600 "${PKI_DIR}"/bob/*.key
+chmod 600 "${PKI_DIR}"/ca/*.key
+chmod 644 "${PKI_DIR}"/alice/*.pem
+chmod 644 "${PKI_DIR}"/bob/*.pem
+chmod 644 "${PKI_DIR}"/ca/*.pem
 
 echo "PKI generation complete!"
 echo ""

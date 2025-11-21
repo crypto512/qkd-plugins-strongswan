@@ -17,12 +17,6 @@ COPY docker/kme-mock/config.yaml /etc/kme/config.yaml
 # Create certificate directory
 RUN mkdir -p /etc/kme/certs
 
-# Non-root user for security
-RUN useradd -r -s /bin/false kme && \
-    chown -R kme:kme /app /etc/kme
-
-USER kme
-
 EXPOSE 8443
 
 HEALTHCHECK --interval=10s --timeout=5s --start-period=5s --retries=3 \

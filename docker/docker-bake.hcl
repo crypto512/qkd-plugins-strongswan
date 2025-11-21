@@ -26,7 +26,6 @@ target "alice" {
     ETSI_API_VERSION = "${ETSI_API_VERSION}"
     QKD_INITIATION_MODE = "${QKD_INITIATION_MODE}"
   }
-  no-cache = true
 }
 
 target "bob" {
@@ -38,12 +37,10 @@ target "bob" {
     ETSI_API_VERSION = "${ETSI_API_VERSION}"
     QKD_INITIATION_MODE = "${QKD_INITIATION_MODE}"
   }
-  no-cache = true
 }
 
 target "kme" {
   context = ".."
   dockerfile = "docker/Dockerfile.kme"
   tags = ["qkd-kme:latest"]
-  no-cache = true
 }

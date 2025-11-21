@@ -1,6 +1,6 @@
 AM_CPPFLAGS = \
     -I$(strongswan_headers) \
-    -include /usr/lib/ipsec/include/config.h \
+    -include $(strongswan_headers)/config.h \
     $(OPENSSL_CFLAGS) \
     $(QKD_ETSI_API_CFLAGS) \
     $(QKD_KEM_PROVIDER_CFLAGS)

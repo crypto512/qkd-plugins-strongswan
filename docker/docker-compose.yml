@@ -1,0 +1,145 @@
+version: "3.8"
+
+services:
+  # Redis for shared key storage between KMEs
+  redis:
+    image: redis:7-alpine
+    container_name: qkd-redis
+    command: redis-server --requirepass qkd-redis-secret
+    environment:
+      - REDIS_PASSWORD=qkd-redis-secret
+    networks:
+      qkd-net:
+        ipv4_address: 10.1.0.2
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "qkd-redis-secret", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  # Mock KME for Alice (master side)
+  kme-alice:
+    image: qkd-kme:latest
+    container_name: qkd-kme-alice
+    environment:
+      - KME_ID=kme-alice
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=qkd-redis-secret
+      - DEFAULT_KEY_SIZE=256
+      - LOG_LEVEL=INFO
+    volumes:
+      - ./pki/kme:/etc/kme/certs:ro
+      - ./configs/kme-alice.yaml:/etc/kme/config.yaml:ro
+    networks:
+      qkd-net:
+        ipv4_address: 10.1.0.100
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request, ssl; ctx=ssl.create_default_context(); ctx.check_hostname=False; ctx.verify_mode=ssl.CERT_NONE; urllib.request.urlopen('https://localhost:8443/health', context=ctx)"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  # Mock KME for Bob (slave side)
+  kme-bob:
+    image: qkd-kme:latest
+    container_name: qkd-kme-bob
+    environment:
+      - KME_ID=kme-bob
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=qkd-redis-secret
+      - DEFAULT_KEY_SIZE=256
+      - LOG_LEVEL=INFO
+    volumes:
+      - ./pki/kme:/etc/kme/certs:ro
+      - ./configs/kme-bob.yaml:/etc/kme/config.yaml:ro
+    networks:
+      qkd-net:
+        ipv4_address: 10.1.0.101
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request, ssl; ctx=ssl.create_default_context(); ctx.check_hostname=False; ctx.verify_mode=ssl.CERT_NONE; urllib.request.urlopen('https://localhost:8443/health', context=ctx)"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  # Alice (IKE initiator / master SAE)
+  alice:
+    image: qkd-alice:latest
+    container_name: qkd-alice
+    hostname: alice
+    environment:
+      - QKD_SSL_VERIFY_HOST=0
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    sysctls:
+      - net.ipv4.ip_forward=1
+      - net.ipv4.conf.all.accept_redirects=0
+      - net.ipv4.conf.all.send_redirects=0
+    volumes:
+      - ./configs/alice/strongswan.conf:/etc/strongswan.conf:ro
+      - ./configs/alice/swanctl/swanctl.conf:/etc/swanctl/swanctl.conf:ro
+      - ./configs/plugins/qkd-alice.conf:/etc/strongswan.d/charon/qkd.conf:ro
+      - ./pki/alice/alice.pem:/etc/swanctl/x509/alice.pem:ro
+      - ./pki/alice/alice.key:/etc/swanctl/private/alice.key:ro
+      - ./pki/ca/ca.pem:/etc/swanctl/x509ca/ca.pem:ro
+      - ./pki/alice/alice-sae.pem:/etc/swanctl/qkd/alice-sae.pem:ro
+      - ./pki/alice/alice-sae.key:/etc/swanctl/qkd/alice-sae.key:ro
+      - ./pki/ca/ca.pem:/etc/swanctl/qkd/ca.pem:ro
+    networks:
+      qkd-net:
+        ipv4_address: 10.1.0.10
+    depends_on:
+      kme-alice:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Bob (IKE responder / slave SAE)
+  bob:
+    image: qkd-bob:latest
+    container_name: qkd-bob
+    hostname: bob
+    environment:
+      - QKD_SSL_VERIFY_HOST=0
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    sysctls:
+      - net.ipv4.ip_forward=1
+      - net.ipv4.conf.all.accept_redirects=0
+      - net.ipv4.conf.all.send_redirects=0
+    volumes:
+      - ./configs/bob/strongswan.conf:/etc/strongswan.conf:ro
+      - ./configs/bob/swanctl/swanctl.conf:/etc/swanctl/swanctl.conf:ro
+      - ./configs/plugins/qkd-bob.conf:/etc/strongswan.d/charon/qkd.conf:ro
+      - ./pki/bob/bob.pem:/etc/swanctl/x509/bob.pem:ro
+      - ./pki/bob/bob.key:/etc/swanctl/private/bob.key:ro
+      - ./pki/ca/ca.pem:/etc/swanctl/x509ca/ca.pem:ro
+      - ./pki/bob/bob-sae.pem:/etc/swanctl/qkd/bob-sae.pem:ro
+      - ./pki/bob/bob-sae.key:/etc/swanctl/qkd/bob-sae.key:ro
+      - ./pki/ca/ca.pem:/etc/swanctl/qkd/ca.pem:ro
+    networks:
+      qkd-net:
+        ipv4_address: 10.1.0.20
+    depends_on:
+      kme-bob:
+        condition: service_healthy
+    restart: unless-stopped
+
+networks:
+  qkd-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.1.0.0/24
+          gateway: 10.1.0.1

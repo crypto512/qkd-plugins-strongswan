@@ -1,0 +1,122 @@
+# Multi-stage build for strongSwan with QKD plugin
+# Stage 1: Build environment
+
+FROM ubuntu:24.04 AS builder
+
+ARG STRONGSWAN_VERSION=6.0.0beta6
+ARG ETSI_API_VERSION=014
+ARG QKD_INITIATION_MODE=client
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    automake \
+    autoconf \
+    libtool \
+    pkg-config \
+    git \
+    libgmp-dev \
+    libssl-dev \
+    libcurl4-openssl-dev \
+    libjansson-dev \
+    uuid-dev \
+    bison \
+    flex \
+    gperf \
+    gettext \
+    cmake \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+# Clone and build strongSwan
+RUN git clone --depth 1 --branch ${STRONGSWAN_VERSION} \
+    https://github.com/strongswan/strongswan.git /build/strongswan || \
+    git clone https://github.com/strongswan/strongswan.git /build/strongswan
+
+WORKDIR /build/strongswan
+
+RUN ./autogen.sh && \
+    ./configure \
+        --prefix=/usr \
+        --sysconfdir=/etc \
+        --with-dev-headers=/usr/include/strongswan \
+        --disable-defaults \
+        --enable-openssl \
+        --enable-pem \
+        --enable-pkcs1 \
+        --enable-pkcs8 \
+        --enable-x509 \
+        --enable-pubkey \
+        --enable-nonce \
+        --enable-random \
+        --enable-drbg \
+        --enable-kernel-netlink \
+        --enable-socket-default \
+        --enable-vici \
+        --enable-swanctl \
+        --enable-charon \
+        --enable-ikev2 \
+        --enable-stroke \
+        --enable-updown \
+        --enable-eap-identity \
+        --enable-eap-mschapv2 \
+        --enable-xauth-generic \
+        --enable-counters \
+        --enable-sha2 \
+        --enable-sha1 \
+        --enable-md5 \
+        --enable-aes \
+        --enable-des \
+        --enable-hmac \
+        --enable-fips-prf \
+        --enable-gmp \
+        --enable-xcbc \
+        --enable-cmac \
+        --enable-ctr \
+        --enable-ccm \
+        --enable-gcm \
+        --enable-resolve \
+        --enable-attr \
+    && make -j$(nproc) \
+    && make install DESTDIR=/build/strongswan-install \
+    && cp config.h /build/strongswan-install/usr/include/strongswan/
+
+# Build QKD ETSI API C Wrapper
+COPY git-clone/qkd-etsi-api-c-wrapper /build/qkd-etsi-api-c-wrapper
+
+WORKDIR /build/qkd-etsi-api-c-wrapper
+
+RUN mkdir -p build && cd build && \
+    cmake .. \
+        -DCMAKE_INSTALL_PREFIX=/usr/local \
+        -DQKD_BACKEND=qukaydee \
+        -DENABLE_ETSI004=OFF \
+        -DENABLE_ETSI014=ON \
+        -DBUILD_SHARED_LIBS=ON \
+    && make -j$(nproc) \
+    && make install DESTDIR=/build/qkd-api-install
+
+# Build QKD plugin
+COPY . /build/qkd-plugins-strongswan
+
+WORKDIR /build/qkd-plugins-strongswan
+
+RUN autoreconf -i && \
+    ./configure \
+        --with-strongswan-headers=/build/strongswan-install/usr/include/strongswan \
+        --with-plugin-dir=/usr/lib/ipsec/plugins \
+        --with-qkd-etsi-api=/build/qkd-api-install/usr/local \
+        --with-qkd-initiation-mode=${QKD_INITIATION_MODE} \
+        --with-etsi-api-version=${ETSI_API_VERSION} \
+    && make -j$(nproc) \
+    && make install DESTDIR=/build/qkd-plugin-install
+
+# Stage 2: Collect all artifacts
+FROM scratch AS artifacts
+
+COPY --from=builder /build/strongswan-install /strongswan
+COPY --from=builder /build/qkd-api-install /qkd-api
+COPY --from=builder /build/qkd-plugin-install /qkd-plugin

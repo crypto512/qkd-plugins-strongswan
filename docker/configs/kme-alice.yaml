@@ -1,0 +1,20 @@
+# KME Alice configuration
+kme_id: "kme-alice"
+target_kme_id: "kme-bob"
+
+redis_host: "redis"
+redis_port: 6379
+redis_password: "qkd-redis-secret"
+
+default_key_size: 256
+max_key_count: 10000
+max_key_per_request: 128
+max_key_size: 4096
+min_key_size: 64
+
+port: 8443
+log_level: "INFO"
+
+# TLS configuration
+ssl_cert: "/etc/kme/certs/kme.pem"
+ssl_key: "/etc/kme/certs/kme.key"

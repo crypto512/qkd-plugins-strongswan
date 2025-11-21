@@ -1,0 +1,191 @@
+# Runtime image for strongSwan with QKD plugin
+# Combined build with multi-stage from artifacts
+
+# Stage 1: Build everything
+FROM ubuntu:24.04 AS builder
+
+ARG STRONGSWAN_VERSION=6.0.0beta6
+ARG ETSI_API_VERSION=014
+ARG QKD_INITIATION_MODE=client
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    automake \
+    autoconf \
+    libtool \
+    pkg-config \
+    git \
+    libgmp-dev \
+    libssl-dev \
+    libcurl4-openssl-dev \
+    libjansson-dev \
+    uuid-dev \
+    bison \
+    flex \
+    gperf \
+    gettext \
+    cmake \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+# Build liboqs for ML-KEM support (RFC 9370 multiple key exchanges)
+RUN git clone --depth 1 --branch 0.12.0 \
+    https://github.com/open-quantum-safe/liboqs.git /build/liboqs
+
+WORKDIR /build/liboqs
+RUN mkdir build && cd build && \
+    cmake .. \
+        -DCMAKE_INSTALL_PREFIX=/usr \
+        -DBUILD_SHARED_LIBS=ON \
+        -DOQS_BUILD_ONLY_LIB=ON \
+    && make -j$(nproc) \
+    && make install \
+    && make install DESTDIR=/build/liboqs-install
+
+WORKDIR /build
+
+# Clone and build strongSwan
+RUN git clone --depth 1 --branch ${STRONGSWAN_VERSION} \
+    https://github.com/strongswan/strongswan.git /build/strongswan || \
+    git clone https://github.com/strongswan/strongswan.git /build/strongswan
+
+WORKDIR /build/strongswan
+
+RUN ./autogen.sh && \
+    ./configure \
+        --prefix=/usr \
+        --sysconfdir=/etc \
+        --with-dev-headers=/usr/include/strongswan \
+        --disable-defaults \
+        --enable-openssl \
+        --enable-pem \
+        --enable-pkcs1 \
+        --enable-pkcs8 \
+        --enable-x509 \
+        --enable-pubkey \
+        --enable-nonce \
+        --enable-random \
+        --enable-drbg \
+        --enable-kernel-netlink \
+        --enable-socket-default \
+        --enable-vici \
+        --enable-swanctl \
+        --enable-charon \
+        --enable-ikev2 \
+        --enable-stroke \
+        --enable-updown \
+        --enable-eap-identity \
+        --enable-eap-mschapv2 \
+        --enable-xauth-generic \
+        --enable-counters \
+        --enable-sha2 \
+        --enable-sha1 \
+        --enable-md5 \
+        --enable-aes \
+        --enable-des \
+        --enable-hmac \
+        --enable-fips-prf \
+        --enable-gmp \
+        --enable-xcbc \
+        --enable-cmac \
+        --enable-ctr \
+        --enable-ccm \
+        --enable-gcm \
+        --enable-resolve \
+        --enable-attr \
+        --enable-oqs \
+        --enable-curve25519 \
+    && make -j$(nproc) \
+    && make install DESTDIR=/build/strongswan-install \
+    && cp config.h /build/strongswan-install/usr/include/strongswan/
+
+# Build QKD ETSI API C Wrapper
+COPY git-clone/qkd-etsi-api-c-wrapper /build/qkd-etsi-api-c-wrapper
+
+WORKDIR /build/qkd-etsi-api-c-wrapper
+
+RUN mkdir -p build && cd build && \
+    cmake .. \
+        -DCMAKE_INSTALL_PREFIX=/usr/local \
+        -DQKD_BACKEND=cerberis_xgr \
+        -DENABLE_ETSI004=OFF \
+        -DENABLE_ETSI014=ON \
+        -DBUILD_SHARED_LIBS=ON \
+    && make -j$(nproc) \
+    && make install DESTDIR=/build/qkd-api-install
+
+# Build QKD plugin
+COPY . /build/qkd-plugins-strongswan
+
+WORKDIR /build/qkd-plugins-strongswan
+
+RUN autoreconf -i && \
+    ./configure \
+        --with-strongswan-headers=/build/strongswan-install/usr/include/strongswan \
+        --with-plugin-dir=/usr/lib/ipsec/plugins \
+        --with-qkd-etsi-api=/build/qkd-api-install/usr/local \
+        --with-qkd-initiation-mode=${QKD_INITIATION_MODE} \
+        --with-etsi-api-version=${ETSI_API_VERSION} \
+    && make -j$(nproc) \
+    && make install DESTDIR=/build/qkd-plugin-install
+
+# Stage 2: Runtime image
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install runtime dependencies only
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgmp10 \
+    libssl3 \
+    libcurl4 \
+    libjansson4 \
+    libuuid1 \
+    iproute2 \
+    iptables \
+    iputils-ping \
+    net-tools \
+    tcpdump \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy strongSwan from builder
+COPY --from=builder /build/strongswan-install /
+
+# Copy liboqs for ML-KEM support
+COPY --from=builder /build/liboqs-install /
+
+# Copy QKD ETSI API library
+COPY --from=builder /build/qkd-api-install /
+
+# Copy QKD plugin
+COPY --from=builder /build/qkd-plugin-install /
+
+# Update library cache
+RUN ldconfig
+
+# Create required directories
+RUN mkdir -p /etc/swanctl/conf.d \
+             /etc/swanctl/x509 \
+             /etc/swanctl/x509ca \
+             /etc/swanctl/private \
+             /etc/swanctl/qkd \
+             /var/run/charon
+
+# Expose IKE ports
+EXPOSE 500/udp 4500/udp
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD swanctl --stats || exit 1
+
+# Entry point
+COPY docker/scripts/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["charon"]

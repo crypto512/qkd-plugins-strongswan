@@ -1,0 +1,34 @@
+# Mock KME Server for ETSI GS QKD 014 testing
+FROM python:3.12-slim
+
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+
+WORKDIR /app
+
+# Install dependencies
+COPY docker/kme-mock/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application
+COPY docker/kme-mock/server.py .
+COPY docker/kme-mock/config.yaml /etc/kme/config.yaml
+
+# Create certificate directory
+RUN mkdir -p /etc/kme/certs
+
+# Non-root user for security
+RUN useradd -r -s /bin/false kme && \
+    chown -R kme:kme /app /etc/kme
+
+USER kme
+
+EXPOSE 8443
+
+HEALTHCHECK --interval=10s --timeout=5s --start-period=5s --retries=3 \
+    CMD python -c "import urllib.request, ssl; ctx=ssl.create_default_context(); ctx.check_hostname=False; ctx.verify_mode=ssl.CERT_NONE; urllib.request.urlopen('https://localhost:8443/health', context=ctx)" || exit 1
+
+# Use gunicorn with TLS
+CMD ["gunicorn", "--bind", "0.0.0.0:8443", "--workers", "2", "--threads", "4", \
+     "--certfile", "/etc/kme/certs/kme.pem", "--keyfile", "/etc/kme/certs/kme.key", \
+     "server:app"]

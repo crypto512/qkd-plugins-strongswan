@@ -1,6 +1,6 @@
 AM_CPPFLAGS = \
 	-I$(strongswan_headers) \
-	-include /usr/lib/ipsec/include/config.h \
+	-include $(strongswan_headers)/config.h \
 	$(QKD_ETSI_API_CFLAGS)
 
 # Define which ETSI API version to use based on configure.ac settings
@@ -18,11 +18,12 @@ AM_CPPFLAGS += -DQKD_CLIENT_INITIATED=1
 endif
 
 AM_CFLAGS = \
-	-Wall -Wno-format -Wno-format-security -Wno-pointer-sign -Wno-missing-field-initializers
+	-Wall -Wno-pointer-sign -Wno-missing-field-initializers
 
 noinst_LTLIBRARIES = libqkd-etsi-adapter.la
 
 libqkd_etsi_adapter_la_SOURCES = \
+	qkd_config.h qkd_config.c \
 	qkd_etsi_adapter.h qkd_etsi_adapter.c \
 	qkd_kex.h qkd_kex.c
 

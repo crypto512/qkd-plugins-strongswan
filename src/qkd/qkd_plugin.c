@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2024 Javier Blanco-Romero @fj-blanco (UC3M, QURSA project)
+ * Copyright (C) 2024-2025 Javier Blanco-Romero @fj-blanco (UC3M, QURSA project)
  */
 
 /*
@@ -8,6 +8,7 @@
 
 #include "qkd_plugin.h"
 #include "qkd_kex.h"
+#include "qkd_config.h"
 
 #include <crypto/proposal/proposal_keywords.h>
 #include <library.h>
@@ -44,6 +45,7 @@ METHOD(plugin_t, get_features, int, private_qkd_plugin_t *this,
 
 METHOD(plugin_t, destroy, void, private_qkd_plugin_t *this) {
     DBG2(DBG_LIB, "QKD_plugin: destroying QKD plugin");
+    qkd_config_destroy();
     free(this);
 }
 
@@ -51,6 +53,12 @@ plugin_t *qkd_plugin_create(void) {
     private_qkd_plugin_t *this;
 
     DBG1(DBG_LIB, "QKD_plugin: plugin_create called");
+
+    /* Initialize configuration from strongswan.conf */
+    if (!qkd_config_init()) {
+        DBG1(DBG_LIB, "QKD_plugin: configuration initialization failed");
+        return NULL;
+    }
 
     INIT(this,
          .public = {
@@ -64,6 +72,7 @@ plugin_t *qkd_plugin_create(void) {
 
     if (!this) {
         DBG1(DBG_LIB, "QKD_plugin: INIT failed");
+        qkd_config_destroy();
         return NULL;
     }
 

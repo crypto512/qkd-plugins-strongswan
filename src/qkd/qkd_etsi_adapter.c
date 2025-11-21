@@ -8,6 +8,7 @@
  * QKD ETSI API
  */
 #include "qkd_etsi_adapter.h"
+#include "qkd_config.h"
 #include <openssl/bio.h>
 #include <openssl/buffer.h>
 #include <openssl/evp.h>
@@ -44,17 +45,6 @@ struct qkd_handle_t {
 #endif
 };
 
-#define ENV_QKD_BACKEND "QKD_BACKEND"
-#define ENV_QKD_SOURCE_URI "QKD_SOURCE_URI"
-#define ENV_QKD_DEST_URI "QKD_DEST_URI"
-
-#ifdef ETSI_014_API
-#define ENV_MASTER_KME "QKD_MASTER_KME_HOSTNAME"
-#define ENV_SLAVE_KME "QKD_SLAVE_KME_HOSTNAME"
-#define ENV_MASTER_SAE "QKD_MASTER_SAE"
-#define ENV_SLAVE_SAE "QKD_SLAVE_SAE"
-#endif
-
 void qkd_print_key_id(const char *prefix, chunk_t key_id) {
     char hex[256] = "";
     chunk_to_hex(key_id, hex, FALSE);
@@ -62,12 +52,30 @@ void qkd_print_key_id(const char *prefix, chunk_t key_id) {
 }
 
 void qkd_print_key(const char *prefix, chunk_t key) {
-    char hex[2048] = "";
-    chunk_to_hex(key, hex, FALSE);
-    DBG1(DBG_LIB, "QKD_plugin: %s key: %s", prefix, hex);
+    qkd_config_t *cfg = qkd_config_get();
+    /* Only print keys if debug_keys is explicitly enabled (INSECURE) */
+    if (cfg && cfg->debug_keys) {
+        char hex[2048] = "";
+        chunk_to_hex(key, hex, FALSE);
+        DBG1(DBG_LIB, "QKD_plugin: %s key: %s", prefix, hex);
+    } else {
+        DBG2(DBG_LIB, "QKD_plugin: %s key: [%zu bytes, hidden]", prefix, key.len);
+    }
 }
 
 #ifdef ETSI_014_API
+static void free_key_container(qkd_key_container_t *container) {
+    if (container && container->keys) {
+        for (size_t i = 0; i < container->key_count; i++) {
+            free(container->keys[i].key_ID);
+            free(container->keys[i].key);
+        }
+        free(container->keys);
+        container->keys = NULL;
+        container->key_count = 0;
+    }
+}
+
 static int encode_UUID(const char *uuid_str, unsigned char bin[16]) {
     if (uuid_parse(uuid_str, bin) == -1)
         return -1;
@@ -122,30 +130,47 @@ bool qkd_open(qkd_handle_t *handle) {
     (*handle)->is_connected = FALSE;
 #endif
 
-    const char *qkd_backend = getenv(ENV_QKD_BACKEND);
-    const char *backend_name = qkd_backend ? qkd_backend : "simulated";
-
-#ifdef ETSI_014_API
-    // ETSI 014 requires KME and SAE configuration
-    const char *master_kme = getenv(ENV_MASTER_KME);
-    const char *slave_kme = getenv(ENV_SLAVE_KME);
-    const char *master_sae = getenv(ENV_MASTER_SAE);
-    const char *slave_sae = getenv(ENV_SLAVE_SAE);
-
-    if (!master_kme || !slave_kme || !master_sae || !slave_sae) {
-        DBG1(DBG_LIB,
-             "QKD_plugin: missing required ETSI 014 environment variables");
-        DBG1(DBG_LIB, "  Required: QKD_MASTER_KME_HOSTNAME, "
-                      "QKD_SLAVE_KME_HOSTNAME, QKD_MASTER_SAE, QKD_SLAVE_SAE");
+    /* Get global configuration */
+    qkd_config_t *cfg = qkd_config_get();
+    if (!cfg) {
+        DBG1(DBG_LIB, "QKD_plugin: configuration not available");
         free(*handle);
         *handle = NULL;
         return FALSE;
     }
 
-    (*handle)->master_kme = strdup(master_kme);
-    (*handle)->slave_kme = strdup(slave_kme);
-    (*handle)->master_sae = strdup(master_sae);
-    (*handle)->slave_sae = strdup(slave_sae);
+    const char *backend_name = cfg->qkd_backend ? cfg->qkd_backend : "simulated";
+
+#ifdef ETSI_014_API
+    // ETSI 014 requires KME and SAE configuration from strongswan.conf
+
+    if (!cfg->master_kme_hostname || !cfg->slave_kme_hostname ||
+        !cfg->master_sae_id || !cfg->slave_sae_id) {
+        DBG1(DBG_LIB,
+             "QKD_plugin: missing required ETSI 014 configuration in strongswan.conf");
+        DBG1(DBG_LIB, "  Required in charon.plugins.qkd: master_kme_hostname, "
+                      "slave_kme_hostname, master_sae_id, slave_sae_id");
+        free(*handle);
+        *handle = NULL;
+        return FALSE;
+    }
+
+    (*handle)->master_kme = strdup(cfg->master_kme_hostname);
+    (*handle)->slave_kme = strdup(cfg->slave_kme_hostname);
+    (*handle)->master_sae = strdup(cfg->master_sae_id);
+    (*handle)->slave_sae = strdup(cfg->slave_sae_id);
+
+    if (!(*handle)->master_kme || !(*handle)->slave_kme ||
+        !(*handle)->master_sae || !(*handle)->slave_sae) {
+        DBG1(DBG_LIB, "QKD_plugin: memory allocation failed");
+        free((*handle)->master_kme);
+        free((*handle)->slave_kme);
+        free((*handle)->master_sae);
+        free((*handle)->slave_sae);
+        free(*handle);
+        *handle = NULL;
+        return FALSE;
+    }
 
     DBG1(DBG_LIB, "QKD_plugin: ETSI 014 configuration:");
     DBG1(DBG_LIB, "  Backend: %s", backend_name);
@@ -154,43 +179,62 @@ bool qkd_open(qkd_handle_t *handle) {
     DBG1(DBG_LIB, "  Master SAE: %s", (*handle)->master_sae);
     DBG1(DBG_LIB, "  Slave SAE: %s", (*handle)->slave_sae);
 
-#elif defined(ETSI_004_API)
-    // ETSI 004 requires URI configuration
-    const char *source_uri = getenv(ENV_QKD_SOURCE_URI);
-    const char *dest_uri = getenv(ENV_QKD_DEST_URI);
+    /* Configure certificates in wrapper if available */
+    if (cfg->cert_path && cfg->key_path && cfg->ca_cert_path && cfg->master_sae_id) {
+        qkd_cert_config_t cert_config = {
+            .cert_path = cfg->cert_path,
+            .key_path = cfg->key_path,
+            .ca_cert_path = cfg->ca_cert_path,
+            .sae_id = cfg->master_sae_id
+        };
+        QKD_014_SET_CERT_CONFIG(&cert_config);
+        DBG1(DBG_LIB, "QKD_plugin: Certificate configuration passed to wrapper");
+    } else {
+        DBG1(DBG_LIB, "QKD_plugin: No certificate configuration (may be OK for simulated backend)");
+    }
 
-    if (!source_uri || !dest_uri) {
+#elif defined(ETSI_004_API)
+    // ETSI 004 requires URI configuration from strongswan.conf
+    if (!cfg->source_uri || !cfg->dest_uri) {
         DBG1(DBG_LIB,
-             "QKD_plugin: missing required ETSI 004 URI environment variables");
-        DBG1(DBG_LIB, "  Required: QKD_SOURCE_URI, QKD_DEST_URI");
+             "QKD_plugin: missing required ETSI 004 URI configuration");
+        DBG1(DBG_LIB, "  Required in charon.plugins.qkd: source_uri, dest_uri");
         free(*handle);
         *handle = NULL;
         return FALSE;
     }
 
-    (*handle)->source_uri = strdup(source_uri);
-    (*handle)->dest_uri = strdup(dest_uri);
+    (*handle)->source_uri = strdup(cfg->source_uri);
+    (*handle)->dest_uri = strdup(cfg->dest_uri);
+
+    if (!(*handle)->source_uri || !(*handle)->dest_uri) {
+        DBG1(DBG_LIB, "QKD_plugin: memory allocation failed");
+        free((*handle)->source_uri);
+        free((*handle)->dest_uri);
+        free(*handle);
+        *handle = NULL;
+        return FALSE;
+    }
 
     DBG1(DBG_LIB, "QKD_plugin: ETSI 004 configuration:");
     DBG1(DBG_LIB, "  Backend: %s", backend_name);
     DBG1(DBG_LIB, "  Source URI: %s", (*handle)->source_uri);
     DBG1(DBG_LIB, "  Destination URI: %s", (*handle)->dest_uri);
 
-    // Configure QoS parameters
-    const char *key_chunk_size_env = getenv("QKD_KEY_CHUNK_SIZE");
-    const char *timeout_env = getenv("QKD_TIMEOUT");
-    const char *max_bps_env = getenv("QKD_MAX_BPS");
-    const char *min_bps_env = getenv("QKD_MIN_BPS");
+    // Configure QoS parameters from config
+    uint32_t key_size = cfg->key_size ? cfg->key_size / 8 : QKD_KEY_SIZE;
+    uint32_t timeout = cfg->timeout ? cfg->timeout : 60000;
 
-    (*handle)->qos.Key_chunk_size =
-        key_chunk_size_env ? atoi(key_chunk_size_env) : QKD_KEY_SIZE;
-    (*handle)->qos.Timeout = timeout_env ? atoi(timeout_env) : 60000;
+    (*handle)->qos.Key_chunk_size = key_size;
+    (*handle)->qos.Timeout = timeout;
     (*handle)->qos.Priority = 0;
-    (*handle)->qos.Max_bps = max_bps_env ? atoi(max_bps_env) : 40000;
-    (*handle)->qos.Min_bps = min_bps_env ? atoi(min_bps_env) : 5000;
+    (*handle)->qos.Max_bps = 40000;
+    (*handle)->qos.Min_bps = 5000;
     (*handle)->qos.Jitter = 10;
     (*handle)->qos.TTL = 3600;
-    strcpy((*handle)->qos.Metadata_mimetype, "application/json");
+    strncpy((*handle)->qos.Metadata_mimetype, "application/json",
+            sizeof((*handle)->qos.Metadata_mimetype) - 1);
+    (*handle)->qos.Metadata_mimetype[sizeof((*handle)->qos.Metadata_mimetype) - 1] = '\0';
 
     DBG1(DBG_LIB, "QKD_plugin: QoS configuration:");
     DBG1(DBG_LIB, "  Key chunk size: %u", (*handle)->qos.Key_chunk_size);
@@ -380,15 +424,72 @@ bool qkd_get_key_id(qkd_handle_t handle, chunk_t *key_id) {
     memset(&container, 0, sizeof(container));
 
     request.number = 1;
-    request.size = QKD_KEY_SIZE;
 
-    uint32_t status =
-        GET_KEY(handle->master_kme, handle->slave_sae, &request, &container);
+    /* ETSI 014 Section 5.1.1: Call GET_STATUS first to discover KME capabilities */
+    qkd_config_t *cfg = qkd_config_get();
+    if (!cfg) {
+        DBG1(DBG_LIB, "QKD_plugin: Configuration not available");
+        return FALSE;
+    }
+
+    qkd_status_t kme_status;
+    memset(&kme_status, 0, sizeof(kme_status));
+
+    uint32_t status_ret = GET_STATUS(handle->master_kme, handle->slave_sae, &kme_status);
+    if (status_ret == QKD_STATUS_OK && kme_status.key_size > 0) {
+        /* Use KME-reported key size (already in bits per ETSI 014) */
+        request.size = kme_status.key_size;
+        DBG1(DBG_LIB, "QKD_plugin: Using KME-reported key size: %d bits", request.size);
+        /* Free status fields manually (qkd_014_free_status not available in all backends) */
+        free(kme_status.source_KME_ID);
+        free(kme_status.target_KME_ID);
+        free(kme_status.master_SAE_ID);
+        free(kme_status.slave_SAE_ID);
+    } else {
+        /* Fallback to configured default if GET_STATUS fails */
+        request.size = cfg->key_size;
+        DBG1(DBG_LIB, "QKD_plugin: GET_STATUS failed (status: %u), using configured key size: %u bits",
+             status_ret, request.size);
+    }
+
+    /* Retry loop with exponential backoff for transient failures */
+    uint32_t status = QKD_STATUS_SERVER_ERROR;
+    uint32_t max_attempts = cfg->retry_count > 0 ? cfg->retry_count : 1;
+
+    for (uint32_t attempt = 0; attempt < max_attempts; attempt++) {
+        status = GET_KEY(handle->master_kme, handle->slave_sae, &request, &container);
+
+        if (status == QKD_STATUS_OK) {
+            break; /* Success */
+        }
+
+        /* Don't retry on client errors (4xx) */
+        if (status >= 400 && status < 500) {
+            DBG1(DBG_LIB,
+                 "QKD_plugin: Non-retriable client error %u, not retrying", status);
+            break;
+        }
+
+        /* Retry on server errors (5xx) and timeouts */
+        if (attempt < max_attempts - 1) {
+            /* Exponential backoff: 100ms, 200ms, 400ms, ... with jitter */
+            uint32_t backoff_ms = 100 * (1 << attempt);
+            uint32_t jitter = rand() % 50; /* 0-49ms jitter */
+            uint32_t sleep_ms = backoff_ms + jitter;
+
+            DBG1(DBG_LIB,
+                 "QKD_plugin: GET_KEY failed with status %u (attempt %u/%u), "
+                 "retrying in %u ms...",
+                 status, attempt + 1, max_attempts, sleep_ms);
+
+            usleep(sleep_ms * 1000); /* Convert ms to microseconds */
+        }
+    }
 
     if (status != QKD_STATUS_OK) {
         DBG1(DBG_LIB,
-             "QKD_plugin: Failed to obtain key from QKD system, status: %u",
-             status);
+             "QKD_plugin: Failed to obtain key from QKD system after %u attempts, status: %u",
+             max_attempts, status);
         return FALSE;
     }
 
@@ -396,6 +497,7 @@ bool qkd_get_key_id(qkd_handle_t handle, chunk_t *key_id) {
 
     if (container.key_count <= 0 || !container.keys) {
         DBG1(DBG_LIB, "QKD_plugin: No keys returned");
+        free_key_container(&container);
         return FALSE;
     }
 
@@ -403,17 +505,20 @@ bool qkd_get_key_id(qkd_handle_t handle, chunk_t *key_id) {
 
     if (!first_key->key_ID) {
         DBG1(DBG_LIB, "QKD_plugin: No key ID in the returned key");
+        free_key_container(&container);
         return FALSE;
     }
 
     unsigned char *key_id_data = malloc(QKD_KEY_ID_SIZE);
     if (!key_id_data) {
+        free_key_container(&container);
         return FALSE;
     }
 
     if (encode_UUID(first_key->key_ID, key_id_data) != 0) {
         DBG1(DBG_LIB, "QKD_plugin: Failed to encode UUID");
         free(key_id_data);
+        free_key_container(&container);
         return FALSE;
     }
 
@@ -422,6 +527,7 @@ bool qkd_get_key_id(qkd_handle_t handle, chunk_t *key_id) {
     if (!decoded_key) {
         DBG1(DBG_LIB, "QKD_plugin: Base64 decode failed");
         free(key_id_data);
+        free_key_container(&container);
         return FALSE;
     }
 
@@ -430,6 +536,8 @@ bool qkd_get_key_id(qkd_handle_t handle, chunk_t *key_id) {
 
     handle->key_id = chunk_create(key_id_data, QKD_KEY_ID_SIZE);
     handle->key = chunk_create(decoded_key, outlen);
+
+    free_key_container(&container);
 
     qkd_print_key_id("Generated", handle->key_id);
 
@@ -533,6 +641,7 @@ bool qkd_get_key(qkd_handle_t handle) {
 
     if (container.key_count <= 0 || !container.keys) {
         DBG1(DBG_LIB, "QKD_plugin: No keys returned");
+        free_key_container(&container);
         return FALSE;
     }
 
@@ -542,6 +651,7 @@ bool qkd_get_key(qkd_handle_t handle) {
     unsigned char *decoded_key = base64_decode(first_key->key, &outlen);
     if (!decoded_key) {
         DBG1(DBG_LIB, "QKD_plugin: Base64 decode failed");
+        free_key_container(&container);
         return FALSE;
     }
 
@@ -552,6 +662,8 @@ bool qkd_get_key(qkd_handle_t handle) {
 
     chunk_clear(&handle->key);
     handle->key = chunk_create(decoded_key, outlen);
+
+    free_key_container(&container);
 
     qkd_print_key("Retrieved", handle->key);
 

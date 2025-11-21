@@ -22,3 +22,6 @@ Makefile.in
 *.la
 .libs/
 .deps/
+
+# Generated PKI certificates and keys
+docker/pki/

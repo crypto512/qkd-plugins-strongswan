@@ -1,0 +1,25 @@
+# ETSI GS QKD 014 Mock KME Server Configuration
+
+# KME identification
+kme_id: "kme-alice"
+target_kme_id: "kme-bob"
+
+# Redis backend for shared key storage
+redis_host: "redis"
+redis_port: 6379
+
+# Key parameters (in bits, per ETSI 014 spec)
+default_key_size: 256
+max_key_count: 10000
+max_key_per_request: 128
+max_key_size: 4096
+min_key_size: 64
+
+# Server settings
+port: 8443
+log_level: "INFO"
+
+# TLS certificates (optional - for mTLS)
+# ssl_cert: "/etc/kme/certs/server.pem"
+# ssl_key: "/etc/kme/certs/server.key"
+# ssl_ca: "/etc/kme/certs/ca.pem"

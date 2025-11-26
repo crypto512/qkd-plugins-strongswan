@@ -1,7 +1,7 @@
 # QKD strongSwan Docker Stack Makefile
 BUILDER_NAME := qkd-builder
 
-.PHONY: builder build build-no-cache up down clean test
+.PHONY: builder build build-no-cache up down clean test test-mode-client test-mode-server
 
 # Create dedicated builder if not exists
 builder:
@@ -35,12 +35,8 @@ clean:
 clean-builder:
 	docker buildx rm $(BUILDER_NAME) || true
 
-# Full test: generate certs, build, start, initiate tunnel, test connectivity
-test: build
-	@echo "========================================="
-	@echo "QKD strongSwan Integration Test Suite"
-	@echo "========================================="
-	@echo ""
+# Helper function for single test run
+define run_single_test
 	@echo "[1/7] Generating PKI certificates..."
 	@bash scripts/generate-pki.sh pki
 	@echo ""
@@ -66,42 +62,72 @@ test: build
 	@echo "[7/7] Testing encrypted connectivity..."
 	@docker exec qkd-alice ping -c 4 10.1.0.20 > /tmp/qkd-ping-test.log 2>&1
 	@echo ""
-	@echo "========================================="
 	@echo "Tunnel Status (Alice):"
-	@echo "========================================="
 	@docker exec qkd-alice swanctl --list-sas
 	@echo ""
-	@echo "========================================="
-	@echo "Tunnel Status (Bob):"
-	@echo "========================================="
-	@docker exec qkd-bob swanctl --list-sas
-	@echo ""
-	@echo "========================================="
 	@echo "Ping Test Results:"
-	@echo "========================================="
 	@cat /tmp/qkd-ping-test.log
+	@docker compose down -v
+endef
+
+# Full test: test both initiation modes
+test: build
+	@echo "========================================="
+	@echo "QKD strongSwan Integration Test Suite"
+	@echo "Testing BOTH initiation modes"
+	@echo "========================================="
 	@echo ""
+	@# Cleanup any existing initiation_mode setting
+	@sed -i '/initiation_mode/d' configs/alice/strongswan.conf 2>/dev/null || true
+	@sed -i '/initiation_mode/d' configs/bob/strongswan.conf 2>/dev/null || true
 	@echo "========================================="
-	@echo "Test Summary:"
+	@echo "TEST 1: CLIENT-INITIATED mode"
 	@echo "========================================="
+	@sed -i '/retry_count/a\            initiation_mode = client' configs/alice/strongswan.conf
+	@sed -i '/retry_count/a\            initiation_mode = client' configs/bob/strongswan.conf
+	$(call run_single_test)
 	@if grep -q "0% packet loss" /tmp/qkd-ping-test.log; then \
-		echo "  ✓ Tunnel Status: ESTABLISHED"; \
-		echo "  ✓ Connectivity: SUCCESS (0% packet loss)"; \
-		echo "  ✓ Overall: PASS"; \
-		echo ""; \
-		echo "All tests passed! QKD tunnel is operational."; \
-		TEST_RESULT=0; \
+		echo "  ✓ CLIENT mode: PASS"; \
+		CLIENT_RESULT=0; \
 	else \
-		echo "  ✗ Tunnel Status: UNKNOWN"; \
-		echo "  ✗ Connectivity: FAILED"; \
-		echo "  ✗ Overall: FAIL"; \
-		echo ""; \
-		echo "Tests failed. Check logs above for details."; \
-		TEST_RESULT=1; \
+		echo "  ✗ CLIENT mode: FAIL"; \
+		CLIENT_RESULT=1; \
 	fi; \
-	echo "========================================="; \
-	echo ""; \
-	echo "Cleaning up..."; \
-	docker compose down -v; \
 	rm -f /tmp/qkd-ping-test.log; \
-	exit $$TEST_RESULT
+	echo ""; \
+	echo "========================================="; \
+	echo "TEST 2: SERVER-INITIATED mode"; \
+	echo "========================================="; \
+	sed -i 's/initiation_mode = client/initiation_mode = server/' configs/alice/strongswan.conf; \
+	sed -i 's/initiation_mode = client/initiation_mode = server/' configs/bob/strongswan.conf; \
+	bash scripts/generate-pki.sh pki; \
+	docker compose up -d; \
+	sleep 20; \
+	docker exec qkd-alice swanctl --load-all; \
+	docker exec qkd-bob swanctl --load-all; \
+	docker exec qkd-alice swanctl --initiate --child qkd-child; \
+	sleep 2; \
+	docker exec qkd-alice ping -c 4 10.1.0.20 > /tmp/qkd-ping-test.log 2>&1; \
+	cat /tmp/qkd-ping-test.log; \
+	docker compose down -v; \
+	if grep -q "0% packet loss" /tmp/qkd-ping-test.log; then \
+		echo "  ✓ SERVER mode: PASS"; \
+		SERVER_RESULT=0; \
+	else \
+		echo "  ✗ SERVER mode: FAIL"; \
+		SERVER_RESULT=1; \
+	fi; \
+	rm -f /tmp/qkd-ping-test.log; \
+	sed -i '/initiation_mode/d' configs/alice/strongswan.conf; \
+	sed -i '/initiation_mode/d' configs/bob/strongswan.conf; \
+	echo ""; \
+	echo "========================================="; \
+	echo "FINAL SUMMARY"; \
+	echo "========================================="; \
+	if [ $$CLIENT_RESULT -eq 0 ] && [ $$SERVER_RESULT -eq 0 ]; then \
+		echo "  ✓ All tests PASSED"; \
+		exit 0; \
+	else \
+		echo "  ✗ Some tests FAILED"; \
+		exit 1; \
+	fi

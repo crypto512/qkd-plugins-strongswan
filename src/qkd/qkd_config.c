@@ -186,6 +186,22 @@ bool qkd_config_init(void)
     g_config->dest_uri = get_config_string(
         "dest_uri", NULL, NULL);
 
+    /* Load initiation mode */
+    char *mode_str = get_config_string("initiation_mode", NULL, "client");
+    if (mode_str && strcmp(mode_str, "server") == 0) {
+        g_config->initiation_mode = QKD_INITIATION_SERVER;
+    } else {
+        g_config->initiation_mode = QKD_INITIATION_CLIENT;
+    }
+    free(mode_str);
+
+#ifdef ETSI_004_API
+    /* Warn if server mode with ETSI 004 (not supported) */
+    if (g_config->initiation_mode == QKD_INITIATION_SERVER) {
+        DBG1(DBG_CFG, "QKD_plugin: WARNING - server initiation mode requires ETSI 014 API");
+    }
+#endif
+
     /* Log configuration (without sensitive data) */
     DBG1(DBG_CFG, "QKD_plugin: configuration loaded:");
     DBG1(DBG_CFG, "  master_kme_hostname: %s",
@@ -207,6 +223,8 @@ bool qkd_config_init(void)
          g_config->source_uri ? g_config->source_uri : "(not set)");
     DBG1(DBG_CFG, "  dest_uri (ETSI 004): %s",
          g_config->dest_uri ? g_config->dest_uri : "(not set)");
+    DBG1(DBG_CFG, "  initiation_mode: %s",
+         g_config->initiation_mode == QKD_INITIATION_SERVER ? "server" : "client");
 
     if (g_config->debug_keys) {
         DBG1(DBG_CFG, "QKD_plugin: WARNING - debug_keys enabled (INSECURE)");

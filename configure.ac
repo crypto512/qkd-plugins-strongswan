@@ -82,21 +82,6 @@ PKG_CHECK_MODULES([openssl], [openssl >= 1.1.0],
     ]
 )
 
-# QKD initiation mode
-AC_ARG_WITH([qkd-initiation-mode],
-    [AS_HELP_STRING([--with-qkd-initiation-mode=client|server], [QKD initiation mode [default=client]])],
-    [qkd_initiation_mode="$withval"],
-    [qkd_initiation_mode="client"])
-
-# Add appropriate defines based on QKD initiation mode
-if test "x$qkd_initiation_mode" = "xserver"; then
-    AC_DEFINE([QKD_SERVER_INITIATED], [1], [Using server-initiated QKD mode])
-else
-    AC_DEFINE([QKD_CLIENT_INITIATED], [1], [Using client-initiated QKD mode])
-fi
-
-AM_CONDITIONAL([QKD_SERVER_INITIATED], [test "x$qkd_initiation_mode" = "xserver"])
-
 # QKD ETSI API configuration
 AC_ARG_WITH([qkd-etsi-api],
     [AS_HELP_STRING([--with-qkd-etsi-api=DIR], [path to QKD ETSI API])],
@@ -144,15 +129,6 @@ AC_LINK_IFELSE(
 )
 CFLAGS=$saved_CFLAGS
 LIBS=$saved_LIBS
-
-# Check compatibility between QKD initiation mode and ETSI API version
-if test "x$qkd_initiation_mode" = "xserver" && test "x$etsi_api_version" = "x004"; then
-    AC_MSG_WARN([Server-initiated QKD mode is not compatible with ETSI 004 API. Server-initiated mode requires ETSI 014 API.])
-    AC_MSG_WARN([Consider using --with-etsi-api-version=014 or --with-qkd-initiation-mode=client])
-    if test "x$enable_qkd" = "xyes"; then
-        AC_MSG_ERROR([Incompatible configuration: server-initiated QKD with ETSI 004 API])
-    fi
-fi
 
 # QKD-KEM Provider configuration
 AC_ARG_WITH([qkd-kem-provider],
@@ -207,7 +183,6 @@ if test "x$enable_qkd" = "xyes"; then
     echo "QKD plugin:            enabled"
     echo "QKD ETSI API path:     ${qkd_etsi_api}"
     echo "ETSI API version:      ${etsi_api_version}"
-    echo "QKD initiation mode:   ${qkd_initiation_mode}"
 else
     echo "QKD plugin:            disabled"
 fi

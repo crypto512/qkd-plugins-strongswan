@@ -10,15 +10,18 @@ This repository contains plugins for strongSwan that implement quantum key distr
 
 The plugins support different configuration options:
 
-**QKD Initiation Mode:**
-
-- `--with-qkd-initiation-mode=client` (default): Client initiates QKD key exchange
-- `--with-qkd-initiation-mode=server`: Server initiates QKD key exchange
-
-**ETSI API Version:**
+**ETSI API Version (compile-time):**
 
 - `--with-etsi-api-version=014` (default): Use ETSI GS QKD 014 API
 - `--with-etsi-api-version=004`: Use ETSI GS QKD 004 API
+
+**QKD Initiation Mode (runtime - strongswan.conf):**
+
+Configure in `charon.plugins.qkd`:
+- `initiation_mode = client` (default): IKE initiator generates QKD key_id
+- `initiation_mode = server`: IKE responder generates QKD key_id
+
+> **Note:** Server-initiated mode requires ETSI 014 API.
 
 
 ### Building the Plugins
@@ -42,7 +45,6 @@ Configure the build system:
             --with-plugin-dir=/usr/lib/ipsec/plugins \
             --with-qkd-etsi-api=/usr/local \
             --with-qkd-kem-provider=/usr/local \
-            --with-qkd-initiation-mode=client \
             --with-etsi-api-version=014
 ```
 

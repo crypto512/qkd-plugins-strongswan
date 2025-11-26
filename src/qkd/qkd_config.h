@@ -16,6 +16,14 @@
 #include <library.h>
 
 /**
+ * QKD initiation mode - controls which IKE peer generates the QKD key_id
+ */
+typedef enum {
+    QKD_INITIATION_CLIENT = 0,  /**< IKE initiator generates key_id (default) */
+    QKD_INITIATION_SERVER = 1   /**< IKE responder generates key_id */
+} qkd_initiation_mode_t;
+
+/**
  * QKD plugin configuration structure
  */
 typedef struct qkd_config_t {
@@ -62,6 +70,9 @@ typedef struct qkd_config_t {
     /** Destination URI for ETSI 004 connections */
     char *dest_uri;
 
+    /** QKD initiation mode (client or server) */
+    qkd_initiation_mode_t initiation_mode;
+
 } qkd_config_t;
 
 /**
@@ -84,6 +95,8 @@ typedef struct qkd_config_t {
  *       qkd_backend = simulated
  *       source_uri = alice
  *       dest_uri = bob
+ *       # Initiation mode (client or server, default: client)
+ *       initiation_mode = client
  *   }
  *
  * Falls back to environment variables for backward compatibility (DEPRECATED):

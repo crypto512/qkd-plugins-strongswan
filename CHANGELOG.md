@@ -2,6 +2,111 @@
 
 All notable changes to the strongSwan QKD plugins project.
 
+## [1.2.0] - 2025-11-26
+
+### Runtime QKD Initiation Mode Configuration
+
+This release converts the QKD initiation mode from a compile-time option to a runtime configuration parameter, providing greater deployment flexibility.
+
+### Changed
+
+- **QKD Initiation Mode is now runtime configurable** (`src/qkd/qkd_config.{c,h}`, `src/qkd/qkd_kex.c`, `src/qkd-kem/qkd_kem.c`)
+  - Removed `--with-qkd-initiation-mode` compile-time option
+  - Added `initiation_mode` parameter in `strongswan.conf`
+  - Supports `client` (default) or `server` values
+  - qkd-kem plugin reads from `charon.plugins.qkd-kem.initiation_mode` with fallback to `charon.plugins.qkd.initiation_mode`
+
+### Configuration Example
+
+```conf
+charon.plugins.qkd {
+    master_kme_hostname = https://10.1.0.100:8443
+    slave_kme_hostname = https://10.1.0.101:8443
+    master_sae_id = alice
+    slave_sae_id = bob
+    initiation_mode = client    # or "server"
+}
+```
+
+### QKD Initiation Mode - Deployment Guide
+
+The `initiation_mode` parameter controls which IKE peer generates the QKD key identifier during key exchange.
+
+**ETSI QKD 014 Context:**
+
+In ETSI GS QKD 014, two parties participate:
+- **Master SAE** (Alice) connects to **Master KME** - calls `GET_KEY` to generate new keys
+- **Slave SAE** (Bob) connects to **Slave KME** - calls `GET_KEY_WITH_IDS` to retrieve keys by ID
+
+The key exchange flow:
+1. One party calls `GET_KEY` → obtains key + `key_ID` (UUID)
+2. The `key_ID` is transmitted via IKE protocol
+3. Other party calls `GET_KEY_WITH_IDS` with received `key_ID`
+
+**Topology 1: Use `initiation_mode = client` (default)**
+
+```
+   Branch Office (IKE Initiator)              Headquarters (IKE Responder)
+   ┌─────────────────────────┐                ┌─────────────────────────┐
+   │   IPsec Gateway (Alice) │                │   IPsec Gateway (Bob)   │
+   │   strongSwan client     │◄──── IKE ─────►│   strongSwan server     │
+   └───────────┬─────────────┘                └───────────┬─────────────┘
+               │                                          │
+               │ GET_KEY                                  │ GET_KEY_WITH_IDS
+               ▼                                          ▼
+   ┌───────────────────────┐    QKD Link     ┌───────────────────────┐
+   │     Master KME        │◄───────────────►│     Slave KME         │
+   │   (key generator)     │                 │   (key relay)         │
+   └───────────────────────┘                 └───────────────────────┘
+```
+
+Scenario: Branch initiates VPN to HQ. Branch has Master KME (QKD transmitter).
+
+**Topology 2: Use `initiation_mode = server`**
+
+```
+   Mobile/Remote Site (IKE Initiator)         Data Center (IKE Responder)
+   ┌─────────────────────────┐                ┌─────────────────────────┐
+   │   IPsec Gateway (Alice) │                │   IPsec Gateway (Bob)   │
+   │   strongSwan client     │◄──── IKE ─────►│   strongSwan server     │
+   └───────────┬─────────────┘                └───────────┬─────────────┘
+               │                                          │
+               │ GET_KEY_WITH_IDS                         │ GET_KEY
+               ▼                                          ▼
+   ┌───────────────────────┐    QKD Link     ┌───────────────────────┐
+   │     Slave KME         │◄───────────────►│     Master KME        │
+   │   (key relay)         │                 │   (key generator)     │
+   └───────────────────────┘                 └───────────────────────┘
+```
+
+Scenario: Remote sites connect to central data center. Data center has Master KME.
+
+**Quick Reference:**
+
+| Master KME Location | IKE Role | Mode |
+|---------------------|----------|------|
+| At IKE initiator    | Client   | `client` |
+| At IKE responder    | Server   | `server` |
+
+> **Note:** Server-initiated mode requires ETSI 014 API (incompatible with ETSI 004).
+
+### Breaking Changes
+
+- Users who previously used `--with-qkd-initiation-mode=server` at compile time must now add `initiation_mode = server` to `strongswan.conf`
+
+### Files Modified
+
+1. `src/qkd/qkd_config.h` - Added `qkd_initiation_mode_t` enum and `initiation_mode` field
+2. `src/qkd/qkd_config.c` - Load initiation_mode from strongswan.conf
+3. `src/qkd/qkd_kex.c` - Replace compile-time #ifdef with runtime config checks
+4. `src/qkd-kem/qkd_kem.c` - Add local config helper and runtime checks
+5. `src/qkd/Makefile.am` - Remove QKD_SERVER_INITIATED conditional
+6. `src/qkd-kem/Makefile.am` - Remove QKD_SERVER_INITIATED conditional
+7. `configure.ac` - Remove --with-qkd-initiation-mode option
+8. `README.md` - Update documentation
+
+---
+
 ## [1.1.0] - 2025-11-21
 
 ### ETSI 014 Compliance & Robustness Improvements

@@ -22,7 +22,6 @@ autoreconf -i
             --with-plugin-dir=/usr/lib/ipsec/plugins \
             --with-qkd-etsi-api=/usr/local \
             --with-qkd-kem-provider=/usr/local \
-            --with-qkd-initiation-mode=client \
             --with-etsi-api-version=014
 
 # Build and install
@@ -35,8 +34,12 @@ sudo make install
 
 ## Configure Options
 
-- `--with-qkd-initiation-mode=client|server`: Who initiates QKD exchange (default: client)
 - `--with-etsi-api-version=014|004`: ETSI QKD API version (default: 014)
+
+## Runtime Configuration
+
+In `strongswan.conf`:
+- `charon.plugins.qkd.initiation_mode`: Who generates QKD key_id - `client` (default) or `server`
 
 ## Architecture
 
